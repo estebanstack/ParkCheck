@@ -1,0 +1,394 @@
+// ParkCheck - Prisma Schema
+// Specification Reference: Section 5, 8, 10, 11, 14
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// User role scoping
+enum SiteRole {
+  ENTRANCE_GUARD
+  PARKING_GUARD
+  SUPERVISOR
+  RESIDENTIAL_ADMIN
+  PLATFORM_ADMIN
+}
+
+// Presence status (Orthogonal to inspection task status)
+enum PresenceStatus {
+  INSIDE
+  AWAY
+  UNCERTAIN
+}
+
+// Vehicle movement event type
+enum MovementType {
+  ARRIVAL
+  DEPARTURE
+}
+
+// Inspection task trigger source
+enum TriggerType {
+  SCHEDULED
+  RETURN
+}
+
+// Inspection task lifecycle status
+enum TaskStatus {
+  PENDING
+  COMPLETED
+  OVERDUE
+  UNABLE_TO_COMPLETE
+  CANCELLED
+}
+
+// Routine inspection observation outcome
+enum InspectionResult {
+  NO_VISIBLE_INCIDENT
+  DAMAGE_OBSERVED
+  UNABLE_TO_COMPLETE
+}
+
+// Incident lifecycle
+enum IncidentStatus {
+  REPORTED
+  AWAITING_REVIEW
+  UNDER_INVESTIGATION
+  OWNER_CONTACT_PENDING
+  OWNER_CONTACTED
+  RESOLVED
+  CLOSED
+}
+
+// Attachment category
+enum AttachmentType {
+  DAMAGE_PHOTO
+  INSPECTION_PHOTO
+  SURVEILLANCE_EVIDENCE
+  REPORT_DOCUMENT
+}
+
+// Incident follow-up action type
+enum FollowUpActionType {
+  NOTE
+  SURVEILLANCE_REVIEW
+  OWNER_CONTACT_ATTEMPT
+  STATUS_CHANGE
+  RESOLUTION
+}
+
+// In-app notification delivery
+enum NotificationType {
+  RETURN_INSPECTION_CREATED
+  INSPECTION_OVERDUE
+  DAMAGE_REPORTED
+  OWNER_CONTACT_REQUESTED
+  INCIDENT_UPDATED
+  UNCERTAIN_PRESENCE_ALERT
+}
+
+// Residential Complex with configurable policy settings
+model ResidentialComplex {
+  id                                   String   @id @default(uuid())
+  name                                 String
+  code                                 String   @unique
+  address                              String?
+  city                                 String   @default("Bogotá")
+  country                              String   @default("Colombia")
+  
+  // Configurable inspection policies (Provisional defaults per Section 6, 14)
+  inspectionIntervalMinutes            Int      @default(60)   // e.g. 60 or 120 mins
+  overdueGraceMinutes                  Int      @default(15)   // grace period before task is marked OVERDUE
+  returnSatisfiesScheduledPolicy       String   @default("NEVER") // NEVER | WITHIN_WINDOW
+  returnWindowMinutes                  Int      @default(30)   // window if WITHIN_WINDOW is chosen
+  departureWithPendingTaskPolicy       String   @default("FLAG_FOR_SUPERVISOR_REVIEW") // KEEP_PENDING | FLAG_FOR_SUPERVISOR_REVIEW
+  queueAlertOrderPolicy                String   @default("RETURN_FIRST_ALERTS_PINNED")
+  overdueEscalationMinutes             Int      @default(30)   // threshold to alert supervisor of overdue task
+  movementDedupSeconds                 Int      @default(60)   // cooldown against accidental double gate taps
+  retentionDaysPhotos                  Int      @default(365)  // data retention for images
+  retentionDaysRecords                 Int      @default(365)  // data retention for logs
+
+  active                               Boolean  @default(true)
+  createdAt                            DateTime @default(now())
+  updatedAt                            DateTime @updatedAt
+
+  userRoles                            UserSiteRole[]
+  vehicles                             Vehicle[]
+  movementEvents                       VehicleMovementEvent[]
+  inspectionTasks                      InspectionTask[]
+  inspectionRecords                    InspectionRecord[]
+  incidents                            Incident[]
+  notifications                        Notification[]
+  auditLogs                            AuditLog[]
+
+  @@map("residential_complexes")
+}
+
+// Platform User
+model User {
+  id           String         @id @default(uuid())
+  email        String         @unique
+  name         String
+  passwordHash String
+  active       Boolean        @default(true)
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  siteRoles    UserSiteRole[]
+  movements    VehicleMovementEvent[]
+  inspections  InspectionRecord[]
+  incidents    Incident[]
+  followUps    IncidentFollowUp[]
+  auditLogs    AuditLog[]
+
+  @@map("users")
+}
+
+// Scoped permissions per complex
+model UserSiteRole {
+  id         String             @id @default(uuid())
+  userId     String
+  complexId  String
+  role       SiteRole
+  assignedAt DateTime           @default(now())
+
+  user       User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  complex    ResidentialComplex @relation(fields: [complexId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, complexId, role])
+  @@index([userId])
+  @@index([complexId])
+  @@map("user_site_roles")
+}
+
+// Vehicle registry
+model Vehicle {
+  id           String             @id @default(uuid())
+  complexId    String
+  plate        String             // normalized uppercase (e.g. ABC123)
+  parkingSpace String?            // e.g. "Torre 2 - 304"
+  stickerToken String?            @unique // Opaque NFC/QR lookup token
+  active       Boolean            @default(true)
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+
+  complex      ResidentialComplex @relation(fields: [complexId], references: [id], onDelete: Cascade)
+  presence     VehiclePresence?
+  movements    VehicleMovementEvent[]
+  tasks        InspectionTask[]
+  inspections  InspectionRecord[]
+  incidents    Incident[]
+
+  @@unique([complexId, plate])
+  @@index([complexId])
+  @@index([plate])
+  @@index([stickerToken])
+  @@map("vehicles")
+}
+
+// Append-only vehicle movement history
+model VehicleMovementEvent {
+  id                   String             @id @default(uuid())
+  complexId            String
+  vehicleId            String
+  eventType            MovementType
+  recordedAt           DateTime           @default(now())
+  recordedById         String?
+  source               String             @default("GATE_MANUAL") // GATE_MANUAL | NFC_SCAN | QR_SCAN | SYSTEM
+  idempotencyKey       String?            // to protect against duplicate double-taps
+  notes                String?
+  correctionReference  String?            // reference if this movement amended an erroneous input
+  createdAt            DateTime           @default(now())
+
+  complex              ResidentialComplex @relation(fields: [complexId], references: [id], onDelete: Cascade)
+  vehicle              Vehicle            @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  recordedBy           User?              @relation(fields: [recordedById], references: [id], onDelete: SetNull)
+  triggeredTasks       InspectionTask[]   @relation("MovementTriggeredTasks")
+
+  @@index([complexId, vehicleId])
+  @@index([complexId, recordedAt])
+  @@index([idempotencyKey])
+  @@map("vehicle_movement_events")
+}
+
+// Current vehicle presence projection (Strictly separated from inspection task status)
+model VehiclePresence {
+  id                   String         @id @default(uuid())
+  vehicleId            String         @unique
+  currentStatus        PresenceStatus @default(INSIDE)
+  lastMovementEventId  String?
+  statusUpdatedAt      DateTime       @default(now())
+  verificationDetails  String?        // notes if UNCERTAIN or verified by supervisor
+  updatedAt            DateTime       @updatedAt
+
+  vehicle              Vehicle        @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+
+  @@index([currentStatus])
+  @@map("vehicle_presences")
+}
+
+// Inspection task obligation
+model InspectionTask {
+  id                    String             @id @default(uuid())
+  complexId             String
+  vehicleId             String
+  triggerType           TriggerType        // SCHEDULED | RETURN
+  status                TaskStatus         @default(PENDING)
+  dueAt                 DateTime
+  completedAt           DateTime?
+  isLate                Boolean            @default(false)
+  relatedMovementId     String?            // if triggered by an arrival
+  unableToCompleteReason String?
+  cancellationReason    String?
+  cancelledById         String?
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
+
+  complex               ResidentialComplex @relation(fields: [complexId], references: [id], onDelete: Cascade)
+  vehicle               Vehicle            @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  relatedMovement       VehicleMovementEvent? @relation("MovementTriggeredTasks", fields: [relatedMovementId], references: [id], onDelete: SetNull)
+  records               InspectionRecord[]
+
+  @@index([complexId, status])
+  @@index([complexId, vehicleId])
+  @@index([dueAt])
+  @@index([triggerType, status])
+  @@map("inspection_tasks")
+}
+
+// Submitted inspection record
+model InspectionRecord {
+  id           String             @id @default(uuid())
+  complexId    String
+  vehicleId    String
+  taskId       String
+  inspectedAt  DateTime           @default(now())
+  inspectedById String
+  result       InspectionResult
+  description  String?
+  createdAt    DateTime           @default(now())
+
+  complex      ResidentialComplex @relation(fields: [complexId], references: [id], onDelete: Cascade)
+  vehicle      Vehicle            @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  task         InspectionTask     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  inspectedBy  User               @relation(fields: [inspectedById], references: [id])
+  incidents    Incident[]
+
+  @@index([complexId, vehicleId])
+  @@index([taskId])
+  @@map("inspection_records")
+}
+
+// Incident / Damage report
+model Incident {
+  id                   String             @id @default(uuid())
+  complexId            String
+  vehicleId            String
+  inspectionRecordId   String?
+  reportedById         String
+  observedAt           DateTime           @default(now())
+  description          String
+  status               IncidentStatus     @default(REPORTED)
+  surveillanceRequired Boolean            @default(false)
+  surveillanceOutcome  String?
+  ownerContactRequired Boolean            @default(false)
+  ownerContactedAt     DateTime?
+  ownerContactNotes    String?
+  resolutionNotes      String?
+  resolvedAt           DateTime?
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  complex              ResidentialComplex @relation(fields: [complexId], references: [id], onDelete: Cascade)
+  vehicle              Vehicle            @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  inspectionRecord     InspectionRecord?  @relation(fields: [inspectionRecordId], references: [id], onDelete: SetNull)
+  reportedBy           User               @relation(fields: [reportedById], references: [id])
+  attachments          IncidentAttachment[]
+  followUps            IncidentFollowUp[]
+
+  @@index([complexId, status])
+  @@index([vehicleId])
+  @@map("incidents")
+}
+
+// Attachments for incidents
+model IncidentAttachment {
+  id             String         @id @default(uuid())
+  incidentId     String
+  storageKey     String         // local relative path or S3 key
+  originalName   String
+  mimeType       String
+  fileSize       Int
+  attachmentType AttachmentType @default(DAMAGE_PHOTO)
+  uploadedAt     DateTime       @default(now())
+
+  incident       Incident       @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+
+  @@index([incidentId])
+  @@map("incident_attachments")
+}
+
+// Incident follow-up audit trail
+model IncidentFollowUp {
+  id           String             @id @default(uuid())
+  incidentId   String
+  actionType   FollowUpActionType
+  description  String
+  performedById String
+  performedAt  DateTime           @default(now())
+  outcome      String?
+  createdAt    DateTime           @default(now())
+
+  incident     Incident           @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  performedBy  User               @relation(fields: [performedById], references: [id])
+
+  @@index([incidentId])
+  @@map("incident_follow_ups")
+}
+
+// In-app notifications
+model Notification {
+  id         String             @id @default(uuid())
+  complexId  String
+  recipientId String?           // null means role broadcast
+  targetRole SiteRole?          // broadcast target role (e.g. ENTRANCE_GUARD or SUPERVISOR)
+  type       NotificationType
+  title      String
+  message    String
+  entityType String             // INCIDENT, TASK, VEHICLE
+  entityId   String
+  read       Boolean            @default(false)
+  readAt     DateTime?
+  createdAt  DateTime           @default(now())
+
+  complex    ResidentialComplex @relation(fields: [complexId], references: [id], onDelete: Cascade)
+
+  @@index([complexId, targetRole, read])
+  @@index([complexId, recipientId, read])
+  @@map("notifications")
+}
+
+// Sensitive action audit log
+model AuditLog {
+  id          String             @id @default(uuid())
+  complexId   String?
+  userId      String?
+  action      String             // e.g. VEHICLE_PRESENCE_FORCE_UPDATE, TASK_CANCELLED, RECORD_EXPORTED
+  entityType  String
+  entityId    String
+  detailsJson String?            // JSON payload detailing diff or metadata
+  ipAddress   String?
+  createdAt   DateTime           @default(now())
+
+  complex     ResidentialComplex? @relation(fields: [complexId], references: [id], onDelete: SetNull)
+  user        User?               @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([complexId, createdAt])
+  @@index([entityType, entityId])
+  @@map("audit_logs")
+}
