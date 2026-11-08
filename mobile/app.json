@@ -1,0 +1,45 @@
+{
+  "expo": {
+    "name": "ParkCheck Guard",
+    "slug": "parkcheck-guard",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0f172a"
+    },
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "package": "com.parkcheck.guard",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0f172a"
+      },
+      "permissions": [
+        "android.permission.NFC",
+        "android.permission.CAMERA",
+        "android.permission.INTERNET",
+        "android.permission.ACCESS_NETWORK_STATE"
+      ]
+    },
+    "plugins": [
+      "react-native-nfc-manager",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Permite a ParkCheck usar la cámara para escanear placas de vehículos, códigos QR y capturar evidencia fotográfica de daños."
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "parkcheck-guard-app"
+      }
+    }
+  }
+}

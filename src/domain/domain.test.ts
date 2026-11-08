@@ -367,7 +367,8 @@ describe("ParkCheck Core Domain & Acceptance Criteria", () => {
         incident,
         "Footage at 13:45 shows vehicle arriving already with dent",
         "supervisor-1",
-        tReview
+        tReview,
+        { advanceToUnderInvestigation: true }
       );
       expect(cctvResult.updatedIncident.surveillanceOutcome).toContain("arriving already with dent");
       expect(cctvResult.followUp.actionType).toBe("SURVEILLANCE_REVIEW");

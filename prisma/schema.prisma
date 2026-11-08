@@ -125,6 +125,7 @@ model ResidentialComplex {
   incidents                            Incident[]
   notifications                        Notification[]
   auditLogs                            AuditLog[]
+  syncEventLogs                        SyncEventLog[]
 
   @@map("residential_complexes")
 }
@@ -391,4 +392,26 @@ model AuditLog {
   @@index([complexId, createdAt])
   @@index([entityType, entityId])
   @@map("audit_logs")
+}
+
+// Outbox Synchronization Event Log (Guarantees server-side idempotency and auditability)
+model SyncEventLog {
+  id             String             @id @default(uuid())
+  complexId      String
+  clientEventId  String
+  eventType      String             // MOVEMENT | INSPECTION | INCIDENT | ATTACHMENT
+  entityId       String?            // Resulting database entity ID
+  status         String             // ACKNOWLEDGED | CONFLICT_FLAGGED | REJECTED
+  recordedAt     DateTime           // Client's recorded timestamp
+  receivedAt     DateTime           @default(now()) // Server's received timestamp
+  conflictReason String?
+  responseJson   String?            // Cached response payload for safe idempotent replay
+  createdAt      DateTime           @default(now())
+
+  complex        ResidentialComplex @relation(fields: [complexId], references: [id], onDelete: Cascade)
+
+  @@unique([complexId, clientEventId])
+  @@index([complexId, eventType])
+  @@index([complexId, receivedAt])
+  @@map("sync_event_logs")
 }

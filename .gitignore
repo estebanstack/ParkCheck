@@ -32,6 +32,21 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
+!.env.staging.example
+
+# mobile & android builds
+mobile/node_modules/
+mobile/android/.gradle/
+mobile/android/build/
+mobile/android/app/build/
+mobile/android/local.properties
+mobile/.expo/
+mobile/phase_g_*.png
+mobile/sync_screen_verified.png
+
+# uploads
+/uploads/
 
 # vercel
 .vercel

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSessionFromRequest } from "@/domain/auth";
+import { getSessionFromRequest, hasPermission, validateCsrfOrigin } from "@/domain/auth";
 import { prisma } from "@/domain/serverScheduler";
 import {
   derivePresenceFromMovement,
@@ -11,9 +11,25 @@ import { ComplexPolicy } from "@/domain/types";
 
 export async function POST(req: NextRequest) {
   try {
+    if (!validateCsrfOrigin(req)) {
+      return NextResponse.json(
+        { error: "Solicitud rechazada: origen no autorizado (protección CSRF)" },
+        { status: 403 }
+      );
+    }
+
     const session = getSessionFromRequest(req);
     if (!session) {
       return NextResponse.json({ error: "No autenticado" }, { status: 401 });
+    }
+
+    if (!hasPermission(session.role, "canRecordMovements")) {
+      return NextResponse.json(
+        {
+          error: `Acceso denegado: el rol '${session.role}' no tiene permisos para registrar movimientos.`,
+        },
+        { status: 403 }
+      );
     }
 
     const { plate, eventType, source = "GATE_MANUAL", notes } = await req.json();

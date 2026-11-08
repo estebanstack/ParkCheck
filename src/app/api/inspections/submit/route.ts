@@ -1,14 +1,30 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSessionFromRequest } from "@/domain/auth";
+import { getSessionFromRequest, hasPermission, validateCsrfOrigin } from "@/domain/auth";
 import { prisma } from "@/domain/serverScheduler";
 import { submitTaskResult } from "@/domain/schedulingEngine";
 import { createDamageIncident } from "@/domain/incidentService";
 
 export async function POST(req: NextRequest) {
   try {
+    if (!validateCsrfOrigin(req)) {
+      return NextResponse.json(
+        { error: "Solicitud rechazada: origen no autorizado (protección CSRF)" },
+        { status: 403 }
+      );
+    }
+
     const session = getSessionFromRequest(req);
     if (!session) {
       return NextResponse.json({ error: "No autenticado" }, { status: 401 });
+    }
+
+    if (!hasPermission(session.role, "canPerformInspections")) {
+      return NextResponse.json(
+        {
+          error: `Acceso denegado: el rol '${session.role}' no tiene permisos para realizar inspecciones.`,
+        },
+        { status: 403 }
+      );
     }
 
     const {
@@ -40,6 +56,16 @@ export async function POST(req: NextRequest) {
         return NextResponse.json(
           { error: "No autorizado para este conjunto residencial" },
           { status: 403 }
+        );
+      }
+
+      if (task.status === "COMPLETED") {
+        return NextResponse.json(
+          {
+            error: "La tarea de inspección ya ha sido completada previamente.",
+            alreadyCompleted: true,
+          },
+          { status: 409 }
         );
       }
 

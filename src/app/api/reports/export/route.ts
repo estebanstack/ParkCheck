@@ -2,6 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSessionFromRequest } from "@/domain/auth";
 import { prisma } from "@/domain/serverScheduler";
 
+function escapeCsvCell(val: unknown): string {
+  if (val === null || val === undefined) return '""';
+  const str = String(val);
+  return `"${str.replace(/"/g, '""')}"`;
+}
+
 export async function GET(req: NextRequest) {
   try {
     const session = getSessionFromRequest(req);
@@ -95,12 +101,63 @@ export async function GET(req: NextRequest) {
           "Content-Disposition": `attachment; filename="movimientos_${session.complexId}_${Date.now()}.csv"`,
         },
       });
+    } else if (type === "incidents") {
+      const records = await prisma.incident.findMany({
+        where: { complexId: session.complexId },
+        include: {
+          vehicle: true,
+          reportedBy: { select: { name: true } },
+        },
+        orderBy: { observedAt: "desc" },
+      });
+
+      const headers = [
+        "ID_Incidente",
+        "Fecha_Observacion",
+        "Placa",
+        "Parqueadero",
+        "Estado",
+        "Reportado_Por",
+        "Requiere_CCTV",
+        "Resultado_CCTV",
+        "Requiere_Contacto",
+        "Fecha_Contacto",
+        "Descripcion",
+        "Notas_Resolucion",
+        "Fecha_Resolucion",
+      ];
+
+      const rows = records.map((inc) => [
+        escapeCsvCell(inc.id),
+        escapeCsvCell(inc.observedAt ? inc.observedAt.toISOString() : ""),
+        escapeCsvCell(inc.vehicle?.plate || "N/A"),
+        escapeCsvCell(inc.vehicle?.parkingSpace || "N/A"),
+        escapeCsvCell(inc.status),
+        escapeCsvCell(inc.reportedBy?.name || "Desconocido"),
+        escapeCsvCell(inc.surveillanceRequired ? "SI" : "NO"),
+        escapeCsvCell(inc.surveillanceOutcome || ""),
+        escapeCsvCell(inc.ownerContactRequired ? "SI" : "NO"),
+        escapeCsvCell(inc.ownerContactedAt ? inc.ownerContactedAt.toISOString() : ""),
+        escapeCsvCell(inc.description || ""),
+        escapeCsvCell(inc.resolutionNotes || ""),
+        escapeCsvCell(inc.resolvedAt ? inc.resolvedAt.toISOString() : ""),
+      ]);
+
+      const csvContent = [headers.join(","), ...rows.map((row) => row.join(","))].join("\n");
+
+      return new NextResponse(csvContent, {
+        headers: {
+          "Content-Type": "text/csv; charset=utf-8",
+          "Content-Disposition": `attachment; filename="incidentes_${session.complexId}_${Date.now()}.csv"`,
+        },
+      });
     }
 
     return NextResponse.json({ error: "Tipo de reporte no válido" }, { status: 400 });
-  } catch (err: any) {
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Error al exportar reporte";
     return NextResponse.json(
-      { error: err.message || "Error al exportar reporte" },
+      { error: message },
       { status: 500 }
     );
   }

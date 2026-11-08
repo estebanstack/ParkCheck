@@ -69,6 +69,7 @@ export async function POST(req: NextRequest) {
 
     const response = NextResponse.json({
       success: true,
+      token,
       user: {
         id: user.id,
         email: user.email,
@@ -76,6 +77,12 @@ export async function POST(req: NextRequest) {
         role: matchedRole.role,
         complexId: matchedRole.complexId,
         complexName: matchedRole.complex.name,
+        availableRoles: user.siteRoles.map((sr) => ({
+          complexId: sr.complexId,
+          complexName: sr.complex.name,
+          complexCode: sr.complex.code,
+          role: sr.role,
+        })),
       },
     });
 

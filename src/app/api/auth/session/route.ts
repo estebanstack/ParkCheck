@@ -1,7 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSessionFromRequest } from "@/domain/auth";
+import { getSessionFromRequest, validateCsrfOrigin } from "@/domain/auth";
 
 export async function POST(req: NextRequest) {
+  if (!validateCsrfOrigin(req)) {
+    return NextResponse.json(
+      { error: "Solicitud rechazada: origen no autorizado (protección CSRF)" },
+      { status: 403 }
+    );
+  }
+
   const response = NextResponse.json({ success: true });
   response.cookies.delete("parkcheck_session");
   return response;
